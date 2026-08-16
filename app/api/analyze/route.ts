@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+const genAI = new GoogleGenerativeAI(
+  process.env.GEMINI_API_KEY!
+);
 
 export async function POST(request: Request) {
   try {
@@ -22,18 +24,22 @@ export async function POST(request: Request) {
       model: "gemini-3.5-flash",
     });
 
-    const result = await model.generateContent([
-      {
-        inlineData: {
-          mimeType: file.type,
-          data: base64,
-        },
-      },
-      {
-        text: `
+    let result;
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        result = await model.generateContent([
+          {
+            inlineData: {
+              mimeType: file.type,
+              data: base64,
+            },
+          },
+          {
+            text: `
 Analyze this invoice.
 
-Return ONLY valid JSON with this structure:
+Return ONLY valid JSON with this exact structure:
 
 {
   "supplier_name": "",
@@ -46,11 +52,31 @@ Return ONLY valid JSON with this structure:
   "confidence": 0
 }
 
+The confidence must be a number between 0 and 1.
+
 Do not add markdown.
 Do not add explanations.
-        `,
-      },
-    ]);
+            `,
+          },
+        ]);
+
+        break;
+      } catch (error) {
+        console.error(`Gemini attempt ${attempt} failed:`, error);
+
+        if (attempt === 3) {
+          throw error;
+        }
+
+        await new Promise((resolve) =>
+          setTimeout(resolve, attempt * 3000)
+        );
+      }
+    }
+
+    if (!result) {
+      throw new Error("Gemini did not return a result");
+    }
 
     const text = result.response.text();
 
