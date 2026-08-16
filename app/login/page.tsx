@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
+const SITE_URL = "https://ledgerflow-opal.vercel.app";
+
 export default function LoginPage() {
   const router = useRouter();
 
@@ -11,51 +13,79 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
 
   const [loading, setLoading] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
+
   const [mode, setMode] =
     useState<"login" | "signup">("login");
 
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
-  const SITE_URL =
-    "https://ledgerflow-opal.vercel.app";
-
   /*
    * =========================
-   * AUTH STATE
+   * CHECK EXISTING SESSION
    * =========================
+   *
+   * We check the current session once.
+   *
+   * IMPORTANT:
+   * We do NOT listen to auth state changes here.
+   * This prevents the login page from redirecting
+   * unexpectedly when Supabase restores a session.
    */
 
   useEffect(() => {
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        console.log(
-          "AUTH EVENT:",
-          event
-        );
+    let mounted = true;
 
-        console.log(
-          "AUTH SESSION:",
-          session
-        );
+    async function checkSession() {
+      try {
+        const {
+          data,
+          error: sessionError,
+        } = await supabase.auth.getSession();
 
-        if (
-          session &&
-          (
-            event === "SIGNED_IN" ||
-            event === "INITIAL_SESSION"
-          )
-        ) {
+        if (sessionError) {
+          console.error(
+            "SESSION CHECK ERROR:",
+            sessionError
+          );
+
+          if (mounted) {
+            setCheckingSession(false);
+          }
+
+          return;
+        }
+
+        /*
+         * If a valid session already exists,
+         * send the user to the dashboard.
+         */
+
+        if (data.session) {
           router.replace("/");
-          router.refresh();
+          return;
+        }
+
+        if (mounted) {
+          setCheckingSession(false);
+        }
+      } catch (err) {
+        console.error(
+          "SESSION CHECK FAILED:",
+          err
+        );
+
+        if (mounted) {
+          setCheckingSession(false);
         }
       }
-    );
+    }
+
+    checkSession();
 
     return () => {
-      subscription.unsubscribe();
+      mounted = false;
     };
   }, [router]);
 
@@ -70,11 +100,21 @@ export default function LoginPage() {
   ) {
     e.preventDefault();
 
+    if (loading) {
+      return;
+    }
+
     setError("");
     setMessage("");
 
     const cleanEmail =
       email.trim().toLowerCase();
+
+    /*
+     * =========================
+     * VALIDATION
+     * =========================
+     */
 
     if (!cleanEmail) {
       setError(
@@ -110,18 +150,22 @@ export default function LoginPage() {
         const {
           data,
           error: signupError,
-        } =
-          await supabase.auth.signUp({
-            email: cleanEmail,
-            password,
+        } = await supabase.auth.signUp({
+          email: cleanEmail,
+          password,
 
-            options: {
-              emailRedirectTo:
-                `${SITE_URL}/login`,
-            },
-          });
+          options: {
+            emailRedirectTo:
+              `${SITE_URL}/login`,
+          },
+        });
 
         if (signupError) {
+          console.error(
+            "SIGNUP ERROR:",
+            signupError
+          );
+
           throw signupError;
         }
 
@@ -136,11 +180,9 @@ export default function LoginPage() {
         );
 
         /*
-         * Confirm Email = ON
-         *
-         * Supabase returns:
-         * user = exists
-         * session = null
+         * =========================
+         * EMAIL CONFIRMATION ON
+         * =========================
          */
 
         if (
@@ -157,7 +199,9 @@ export default function LoginPage() {
         }
 
         /*
-         * Confirm Email = OFF
+         * =========================
+         * SESSION CREATED
+         * =========================
          */
 
         if (data.session) {
@@ -168,8 +212,10 @@ export default function LoginPage() {
         }
 
         setMessage(
-          "Account created. Please check your email."
+          "Account created successfully. Please check your email."
         );
+
+        setPassword("");
 
         return;
       }
@@ -184,12 +230,10 @@ export default function LoginPage() {
         data,
         error: loginError,
       } =
-        await supabase.auth.signInWithPassword(
-          {
-            email: cleanEmail,
-            password,
-          }
-        );
+        await supabase.auth.signInWithPassword({
+          email: cleanEmail,
+          password,
+        });
 
       if (loginError) {
         console.error(
@@ -210,14 +254,22 @@ export default function LoginPage() {
         data.session
       );
 
+      /*
+       * =========================
+       * NO SESSION
+       * =========================
+       */
+
       if (!data.session) {
         throw new Error(
-          "Login succeeded but no session was created."
+          "Login succeeded but no active session was created."
         );
       }
 
       /*
-       * Login successful
+       * =========================
+       * LOGIN SUCCESS
+       * =========================
        */
 
       router.replace("/");
@@ -229,20 +281,18 @@ export default function LoginPage() {
         err
       );
 
-      if (
-        err instanceof Error
-      ) {
+      if (err instanceof Error) {
+        const errorMessage =
+          err.message.toLowerCase();
+
         /*
-         * Helpful message for
-         * unconfirmed email
+         * EMAIL NOT CONFIRMED
          */
 
         if (
-          err.message
-            .toLowerCase()
-            .includes(
-              "email not confirmed"
-            )
+          errorMessage.includes(
+            "email not confirmed"
+          )
         ) {
           setError(
             "Your email has not been confirmed yet. Please open the confirmation email and click the confirmation link."
@@ -250,6 +300,26 @@ export default function LoginPage() {
 
           return;
         }
+
+        /*
+         * INVALID LOGIN
+         */
+
+        if (
+          errorMessage.includes(
+            "invalid login credentials"
+          )
+        ) {
+          setError(
+            "Invalid email or password."
+          );
+
+          return;
+        }
+
+        /*
+         * GENERIC SUPABASE ERROR
+         */
 
         setError(
           err.message
@@ -269,11 +339,15 @@ export default function LoginPage() {
 
   /*
    * =========================
-   * SWITCH MODE
+   * SWITCH LOGIN / SIGNUP
    * =========================
    */
 
   function switchMode() {
+    if (loading) {
+      return;
+    }
+
     setError("");
     setMessage("");
 
@@ -286,7 +360,29 @@ export default function LoginPage() {
 
   /*
    * =========================
-   * UI
+   * CHECKING SESSION
+   * =========================
+   */
+
+  if (checkingSession) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-50 px-6">
+
+        <div className="rounded-xl bg-white px-8 py-6 shadow-sm ring-1 ring-slate-200">
+
+          <p className="text-sm font-medium text-slate-600">
+            Checking session...
+          </p>
+
+        </div>
+
+      </main>
+    );
+  }
+
+  /*
+   * =========================
+   * LOGIN PAGE
    * =========================
    */
 
@@ -299,7 +395,11 @@ export default function LoginPage() {
 
         <div className="mb-8 text-center">
 
-          <h1 className="text-4xl font-bold tracking-tight text-slate-900">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-slate-900 text-xl font-bold text-white">
+            L
+          </div>
+
+          <h1 className="mt-4 text-4xl font-bold tracking-tight text-slate-900">
             LedgerFlow
           </h1>
 
@@ -313,22 +413,20 @@ export default function LoginPage() {
 
         <div className="rounded-2xl bg-white p-8 shadow-sm ring-1 ring-slate-200">
 
+          {/* TITLE */}
+
           <div className="mb-7">
 
             <h2 className="text-2xl font-semibold text-slate-900">
-
               {mode === "login"
                 ? "Welcome back"
                 : "Create your account"}
-
             </h2>
 
             <p className="mt-2 text-sm text-slate-500">
-
               {mode === "login"
                 ? "Sign in to your accounting dashboard"
                 : "Create an account to start managing your invoices"}
-
             </p>
 
           </div>
@@ -336,7 +434,6 @@ export default function LoginPage() {
           {/* ERROR */}
 
           {error && (
-
             <div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
 
               <p className="text-sm font-medium text-red-700">
@@ -344,13 +441,11 @@ export default function LoginPage() {
               </p>
 
             </div>
-
           )}
 
           {/* SUCCESS */}
 
           {message && (
-
             <div className="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
 
               <p className="text-sm font-medium text-emerald-700">
@@ -358,7 +453,6 @@ export default function LoginPage() {
               </p>
 
             </div>
-
           )}
 
           {/* FORM */}
@@ -465,7 +559,7 @@ export default function LoginPage() {
 
           </div>
 
-          {/* SWITCH */}
+          {/* SWITCH MODE */}
 
           <button
             type="button"
