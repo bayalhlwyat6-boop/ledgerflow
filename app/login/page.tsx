@@ -1,11 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-
-const ADMIN_USER_ID =
-  "90fecaa3-af3c-4653-aa1d-6d1a38c33c96";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -14,10 +11,59 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
 
   const [loading, setLoading] = useState(false);
-  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [mode, setMode] =
+    useState<"login" | "signup">("login");
 
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+
+  const SITE_URL =
+    "https://ledgerflow-opal.vercel.app";
+
+  /*
+   * =========================
+   * AUTH STATE
+   * =========================
+   */
+
+  useEffect(() => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        console.log(
+          "AUTH EVENT:",
+          event
+        );
+
+        console.log(
+          "AUTH SESSION:",
+          session
+        );
+
+        if (
+          session &&
+          (
+            event === "SIGNED_IN" ||
+            event === "INITIAL_SESSION"
+          )
+        ) {
+          router.replace("/");
+          router.refresh();
+        }
+      }
+    );
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [router]);
+
+  /*
+   * =========================
+   * SUBMIT
+   * =========================
+   */
 
   async function handleSubmit(
     e: React.FormEvent<HTMLFormElement>
@@ -27,13 +73,20 @@ export default function LoginPage() {
     setError("");
     setMessage("");
 
-    if (!email.trim()) {
-      setError("Please enter your email.");
+    const cleanEmail =
+      email.trim().toLowerCase();
+
+    if (!cleanEmail) {
+      setError(
+        "Please enter your email."
+      );
       return;
     }
 
     if (!password) {
-      setError("Please enter your password.");
+      setError(
+        "Please enter your password."
+      );
       return;
     }
 
@@ -49,7 +102,7 @@ export default function LoginPage() {
     try {
       /*
        * =========================
-       * CREATE ACCOUNT
+       * SIGN UP
        * =========================
        */
 
@@ -57,17 +110,37 @@ export default function LoginPage() {
         const {
           data,
           error: signupError,
-        } = await supabase.auth.signUp({
-          email: email.trim(),
-          password,
-        });
+        } =
+          await supabase.auth.signUp({
+            email: cleanEmail,
+            password,
+
+            options: {
+              emailRedirectTo:
+                `${SITE_URL}/login`,
+            },
+          });
 
         if (signupError) {
           throw signupError;
         }
 
+        console.log(
+          "SIGNUP USER:",
+          data.user
+        );
+
+        console.log(
+          "SIGNUP SESSION:",
+          data.session
+        );
+
         /*
-         * Email confirmation is enabled
+         * Confirm Email = ON
+         *
+         * Supabase returns:
+         * user = exists
+         * session = null
          */
 
         if (
@@ -75,34 +148,27 @@ export default function LoginPage() {
           !data.session
         ) {
           setMessage(
-            "Account created successfully. Please check your email to confirm your account."
+            "Account created successfully. Please check your email and click the confirmation link before signing in."
           );
 
           setPassword("");
+
           return;
         }
 
         /*
-         * Email confirmation disabled
+         * Confirm Email = OFF
          */
 
         if (data.session) {
-          const user = data.user;
-
-          if (
-            user?.id === ADMIN_USER_ID
-          ) {
-            router.replace("/admin");
-          } else {
-            router.replace("/");
-          }
-
+          router.replace("/");
           router.refresh();
+
           return;
         }
 
         setMessage(
-          "Account created successfully."
+          "Account created. Please check your email."
         );
 
         return;
@@ -110,52 +176,51 @@ export default function LoginPage() {
 
       /*
        * =========================
-       * SIGN IN
+       * LOGIN
        * =========================
        */
 
       const {
         data,
         error: loginError,
-      } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password,
-      });
+      } =
+        await supabase.auth.signInWithPassword(
+          {
+            email: cleanEmail,
+            password,
+          }
+        );
 
       if (loginError) {
+        console.error(
+          "LOGIN ERROR:",
+          loginError
+        );
+
         throw loginError;
       }
 
-      /*
-       * Make sure a session exists
-       */
+      console.log(
+        "LOGIN USER:",
+        data.user
+      );
 
-      if (!data.session || !data.user) {
+      console.log(
+        "LOGIN SESSION:",
+        data.session
+      );
+
+      if (!data.session) {
         throw new Error(
-          "Login failed. No active session was created."
+          "Login succeeded but no session was created."
         );
       }
 
       /*
-       * =========================
-       * ADMIN REDIRECT
-       * =========================
+       * Login successful
        */
 
-      if (
-        data.user.id === ADMIN_USER_ID
-      ) {
-        router.replace("/admin");
-      } else {
-        /*
-         * =========================
-         * NORMAL USER REDIRECT
-         * =========================
-         */
-
-        router.replace("/");
-      }
-
+      router.replace("/");
       router.refresh();
 
     } catch (err) {
@@ -164,10 +229,37 @@ export default function LoginPage() {
         err
       );
 
-      setError(
+      if (
         err instanceof Error
-          ? err.message
-          : "Authentication failed."
+      ) {
+        /*
+         * Helpful message for
+         * unconfirmed email
+         */
+
+        if (
+          err.message
+            .toLowerCase()
+            .includes(
+              "email not confirmed"
+            )
+        ) {
+          setError(
+            "Your email has not been confirmed yet. Please open the confirmation email and click the confirmation link."
+          );
+
+          return;
+        }
+
+        setError(
+          err.message
+        );
+
+        return;
+      }
+
+      setError(
+        "Authentication failed."
       );
 
     } finally {
@@ -177,7 +269,7 @@ export default function LoginPage() {
 
   /*
    * =========================
-   * SWITCH LOGIN / SIGNUP
+   * SWITCH MODE
    * =========================
    */
 
@@ -192,14 +284,18 @@ export default function LoginPage() {
     );
   }
 
+  /*
+   * =========================
+   * UI
+   * =========================
+   */
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-50 px-6 py-12">
 
       <div className="w-full max-w-md">
 
-        {/* =========================
-            BRAND
-        ========================= */}
+        {/* BRAND */}
 
         <div className="mb-8 text-center">
 
@@ -213,31 +309,31 @@ export default function LoginPage() {
 
         </div>
 
-        {/* =========================
-            CARD
-        ========================= */}
+        {/* CARD */}
 
         <div className="rounded-2xl bg-white p-8 shadow-sm ring-1 ring-slate-200">
 
           <div className="mb-7">
 
             <h2 className="text-2xl font-semibold text-slate-900">
+
               {mode === "login"
                 ? "Welcome back"
                 : "Create your account"}
+
             </h2>
 
             <p className="mt-2 text-sm text-slate-500">
+
               {mode === "login"
                 ? "Sign in to your accounting dashboard"
                 : "Create an account to start managing your invoices"}
+
             </p>
 
           </div>
 
-          {/* =========================
-              ERROR
-          ========================= */}
+          {/* ERROR */}
 
           {error && (
 
@@ -251,9 +347,7 @@ export default function LoginPage() {
 
           )}
 
-          {/* =========================
-              SUCCESS
-          ========================= */}
+          {/* SUCCESS */}
 
           {message && (
 
@@ -267,9 +361,7 @@ export default function LoginPage() {
 
           )}
 
-          {/* =========================
-              FORM
-          ========================= */}
+          {/* FORM */}
 
           <form
             onSubmit={handleSubmit}
@@ -293,10 +385,13 @@ export default function LoginPage() {
                 autoComplete="email"
                 value={email}
                 onChange={(e) =>
-                  setEmail(e.target.value)
+                  setEmail(
+                    e.target.value
+                  )
                 }
                 placeholder="you@example.com"
                 disabled={loading}
+                required
                 className="w-full rounded-lg border border-slate-300 px-4 py-3 text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-100"
               />
 
@@ -323,10 +418,14 @@ export default function LoginPage() {
                 }
                 value={password}
                 onChange={(e) =>
-                  setPassword(e.target.value)
+                  setPassword(
+                    e.target.value
+                  )
                 }
                 placeholder="••••••••"
                 disabled={loading}
+                required
+                minLength={6}
                 className="w-full rounded-lg border border-slate-300 px-4 py-3 text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-100"
               />
 
@@ -352,9 +451,7 @@ export default function LoginPage() {
 
           </form>
 
-          {/* =========================
-              DIVIDER
-          ========================= */}
+          {/* DIVIDER */}
 
           <div className="my-7 flex items-center gap-4">
 
@@ -368,9 +465,7 @@ export default function LoginPage() {
 
           </div>
 
-          {/* =========================
-              SWITCH MODE
-          ========================= */}
+          {/* SWITCH */}
 
           <button
             type="button"
@@ -387,9 +482,7 @@ export default function LoginPage() {
 
         </div>
 
-        {/* =========================
-            FOOTER
-        ========================= */}
+        {/* FOOTER */}
 
         <p className="mt-6 text-center text-xs text-slate-400">
           LedgerFlow • AI Accounting Operations
