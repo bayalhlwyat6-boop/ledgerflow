@@ -180,28 +180,6 @@ export default function InvoiceDetail() {
         throw new Error(updateError.message);
       }
 
-      /*
-       * Create audit log
-       */
-
-      const { error: auditError } = await supabase
-        .from("audit_logs")
-        .insert({
-          document_id: invoice.id,
-          action: "Invoice approved",
-          details:
-            "Invoice manually approved by administrator.",
-          old_status: "completed",
-          new_status: "approved",
-        });
-
-      if (auditError) {
-        console.error(
-          "AUDIT LOG ERROR:",
-          auditError
-        );
-      }
-
       await refreshData();
 
       alert(
@@ -272,28 +250,6 @@ export default function InvoiceDetail() {
       if (updateError) {
         throw new Error(
           updateError.message
-        );
-      }
-
-      /*
-       * Create audit log
-       */
-
-      const { error: auditError } =
-        await supabase
-          .from("audit_logs")
-          .insert({
-            document_id: invoice.id,
-            action: "Invoice rejected",
-            details: reason,
-            old_status: "completed",
-            new_status: "rejected",
-          });
-
-      if (auditError) {
-        console.error(
-          "AUDIT LOG ERROR:",
-          auditError
         );
       }
 
